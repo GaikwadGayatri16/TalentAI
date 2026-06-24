@@ -20,8 +20,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download spaCy English pipeline to avoid download latency during request parsing
-RUN python -m spacy download en_core_web_sm
+# Pre-download spaCy English pipeline directly to bypass registry redirects
+RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.0/en_core_web_sm-3.7.0.tar.gz
 
 # Copy backend files
 # We place backend in /app/backend to match Python package structures
