@@ -18,7 +18,7 @@ const ThemeContext = createContext(null);
 export const useTheme = () => useContext(ThemeContext);
 
 // Configure Axios
-axios.defaults.baseURL = 'http://localhost:8000/api';
+axios.defaults.baseURL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 // Request Interceptor to add JWT
 axios.interceptors.request.use(
