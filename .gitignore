@@ -1,0 +1,56 @@
+# Root level .gitignore for TalentAI project
+
+# Environment variables (contains secret keys)
+.env
+.env*.local
+
+# Database
+*.db
+talentai.db
+
+# Uploaded candidate files
+uploads/
+backend/uploads/
+
+# Python Virtual Environment and packages
+venv/
+backend/venv/
+.venv/
+__pycache__/
+backend/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+develop-eggs/
+dist/
+build/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Node dependencies and build folders
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+
+# IDE settings
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
