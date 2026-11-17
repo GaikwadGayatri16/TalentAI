@@ -18,10 +18,16 @@ class User(Base):
     name = Column(String(100), nullable=False)
     email = Column(String(100), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
-    role = Column(String(50), default="recruiter") # admin or recruiter
+    role = Column(String(50), default="candidate") # "candidate", "recruiter", or "admin"
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     jobs = relationship("Job", back_populates="creator")
+    resumes = relationship("Resume", back_populates="user", cascade="all, delete-orphan")
+    candidate_profile = relationship("Candidate", back_populates="user", uselist=False)
+    analyses = relationship("ResumeAnalysis", back_populates="user", cascade="all, delete-orphan")
+    job_matches = relationship("JobMatch", back_populates="user", cascade="all, delete-orphan")
+    conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
+    interview_preps = relationship("InterviewPrep", back_populates="user", cascade="all, delete-orphan")
 
 class Job(Base):
     __tablename__ = "jobs"
@@ -38,11 +44,13 @@ class Job(Base):
 
     creator = relationship("User", back_populates="jobs")
     scores = relationship("CandidateScore", back_populates="job", cascade="all, delete-orphan")
+    matches = relationship("JobMatch", back_populates="job")
 
 class Candidate(Base):
     __tablename__ = "candidates"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     name = Column(String(100), nullable=False)
     email = Column(String(100), unique=True, index=True, nullable=True)
     phone = Column(String(50), nullable=True)
@@ -50,6 +58,7 @@ class Candidate(Base):
     education = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+    user = relationship("User", back_populates="candidate_profile")
     resume = relationship("Resume", back_populates="candidate", uselist=False, cascade="all, delete-orphan")
     skills = relationship("Skill", secondary=candidate_skills, back_populates="candidates")
     scores = relationship("CandidateScore", back_populates="candidate", cascade="all, delete-orphan")
@@ -58,11 +67,22 @@ class Resume(Base):
     __tablename__ = "resumes"
 
     id = Column(Integer, primary_key=True, index=True)
-    candidate_id = Column(Integer, ForeignKey("candidates.id", ondelete="CASCADE"), unique=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    candidate_id = Column(Integer, ForeignKey("candidates.id", ondelete="SET NULL"), nullable=True, unique=False)
+    file_name = Column(String(255), nullable=True)
+    file_type = Column(String(50), nullable=True)
     resume_path = Column(String(255), nullable=False)
     parsed_text = Column(Text, nullable=True)
+    parsed_json = Column(Text, nullable=True) # Structured JSON representation
+    is_active = Column(Integer, default=1) # 1 if active, 0 otherwise
+    uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+    user = relationship("User", back_populates="resumes")
     candidate = relationship("Candidate", back_populates="resume")
+    analyses = relationship("ResumeAnalysis", back_populates="resume", cascade="all, delete-orphan")
+    job_matches = relationship("JobMatch", back_populates="resume", cascade="all, delete-orphan")
+    conversations = relationship("Conversation", back_populates="resume")
+    interview_preps = relationship("InterviewPrep", back_populates="resume")
 
 class Skill(Base):
     __tablename__ = "skills"
@@ -87,3 +107,92 @@ class CandidateScore(Base):
 
     candidate = relationship("Candidate", back_populates="scores")
     job = relationship("Job", back_populates="scores")
+
+class ResumeAnalysis(Base):
+    __tablename__ = "resume_analyses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    resume_id = Column(Integer, ForeignKey("resumes.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    overall_score = Column(Float, default=0.0)
+    structure_score = Column(Float, default=0.0)
+    content_score = Column(Float, default=0.0)
+    skills_score = Column(Float, default=0.0)
+    experience_score = Column(Float, default=0.0)
+    education_score = Column(Float, default=0.0)
+    readability_score = Column(Float, default=0.0)
+    ats_score = Column(Float, default=0.0)
+    ats_details_json = Column(Text, nullable=True)
+    strengths_json = Column(Text, nullable=True)
+    weaknesses_json = Column(Text, nullable=True)
+    suggestions_json = Column(Text, nullable=True)
+    section_scores_json = Column(Text, nullable=True)
+    raw_analysis_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    resume = relationship("Resume", back_populates="analyses")
+    user = relationship("User", back_populates="analyses")
+
+class JobMatch(Base):
+    __tablename__ = "job_matches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    resume_id = Column(Integer, ForeignKey("resumes.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    job_id = Column(Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+    job_title = Column(String(150), nullable=False)
+    job_company = Column(String(150), nullable=True)
+    job_description = Column(Text, nullable=False)
+    overall_match_score = Column(Float, default=0.0)
+    skill_match_score = Column(Float, default=0.0)
+    semantic_match_score = Column(Float, default=0.0)
+    experience_match_score = Column(Float, default=0.0)
+    matched_skills_json = Column(Text, nullable=True)
+    missing_skills_json = Column(Text, nullable=True)
+    skill_gap_json = Column(Text, nullable=True)
+    recommendations_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    resume = relationship("Resume", back_populates="job_matches")
+    user = relationship("User", back_populates="job_matches")
+    job = relationship("Job", back_populates="matches")
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    resume_id = Column(Integer, ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True, index=True)
+    title = Column(String(200), default="New Chat")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="conversations")
+    resume = relationship("Resume", back_populates="conversations")
+    messages = relationship("ChatMessage", back_populates="conversation", cascade="all, delete-orphan", order_by="ChatMessage.created_at.asc()")
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    sender = Column(String(20), nullable=False) # "user" or "assistant"
+    message = Column(Text, nullable=False)
+    sources_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    conversation = relationship("Conversation", back_populates="messages")
+
+class InterviewPrep(Base):
+    __tablename__ = "interview_preps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    resume_id = Column(Integer, ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True, index=True)
+    target_role = Column(String(150), nullable=False)
+    job_description = Column(Text, nullable=True)
+    questions_json = Column(Text, nullable=False) # JSON array of interview questions and answers
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="interview_preps")
+    resume = relationship("Resume", back_populates="interview_preps")
