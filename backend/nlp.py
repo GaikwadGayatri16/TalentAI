@@ -4,6 +4,13 @@ import json
 import datetime
 import math
 from typing import List, Dict, Tuple, Optional, Any
+from backend.config import settings
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+import google.generativeai as genai
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # NLTK with safe fallback
 import nltk
@@ -15,47 +22,52 @@ except LookupError:
     except Exception:
         pass
 
-# spaCy with safe fallback for Windows WinError 1114 / missing torch DLL
-nlp = None
-try:
-    import spacy
-    try:
-        nlp = spacy.load("en_core_web_sm")
-    except Exception:
-        nlp = None
-except (ImportError, OSError, Exception):
-    nlp = None
 
-# SentenceTransformers with safe fallback
-_has_sentence_transformers = False
+# Lazy loading of spaCy and SentenceTransformer
+# Models are loaded only when their features are needed.
+
+_spacy_model = None
 _embedding_model = None
-try:
-    from sentence_transformers import SentenceTransformer, util
-    _has_sentence_transformers = True
-except (ImportError, OSError, Exception):
-    _has_sentence_transformers = False
+_sentence_transformer_class = None
+_sentence_transformer_util = None
 
-# Scikit-learn fallback (always available and highly reliable)
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
-# Google Generative AI
-import google.generativeai as genai
+def get_spacy_model():
+    global _spacy_model
 
-# LangChain text splitter
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+    if _spacy_model is None:
+        try:
+            import spacy
+            _spacy_model = spacy.load("en_core_web_sm")
+        except Exception as e:
+            print(f"spaCy unavailable, using fallback name extraction: {e}")
+            _spacy_model = False
 
-from backend.config import settings
+    return _spacy_model if _spacy_model else None
+
 
 def get_embedding_model():
     global _embedding_model
-    if _has_sentence_transformers and _embedding_model is None:
+    global _sentence_transformer_class
+    global _sentence_transformer_util
+
+    if _embedding_model is None:
         try:
-            # Load local cached model if available; avoids network timeout stalls
-            _embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL_NAME, local_files_only=True)
-        except Exception:
-            _embedding_model = None
-    return _embedding_model
+            from sentence_transformers import SentenceTransformer, util
+
+            _sentence_transformer_class = SentenceTransformer
+            _sentence_transformer_util = util
+
+            _embedding_model = SentenceTransformer(
+                settings.EMBEDDING_MODEL_NAME,
+                local_files_only=True
+            )
+
+        except Exception as e:
+            print(f"SentenceTransformer unavailable, using TF-IDF fallback: {e}")
+            _embedding_model = False
+
+    return _embedding_model if _embedding_model else None
 
 # Comprehensive dictionary of technical & professional skills
 SKILL_DICTIONARY = {
@@ -152,9 +164,11 @@ def extract_name(text: str) -> str:
     for line in lines[:4]:
         if "@" in line or "resume" in line.lower() or "curriculum" in line.lower() or len(line.split()) > 5:
             continue
-        if nlp:
+        model = get_spacy_model()
+
+        if model:
             try:
-                doc = nlp(line)
+                doc = model(line)
                 for ent in doc.ents:
                     if ent.label_ == "PERSON":
                         return ent.text.strip()
@@ -533,37 +547,63 @@ def analyze_resume_comprehensive(resume_text: str, structured_data: Dict[str, An
         "action_verbs_count": len(set(action_verbs_found))
     }
 
+
 def compute_semantic_similarity(job_description: str, resume_text: str) -> float:
     """
     Computes cosine similarity between job description and resume text.
-    Uses SentenceTransformers if available, with robust scikit-learn TF-IDF fallback.
+    Uses SentenceTransformers if available, with TF-IDF fallback.
     Returns percentage (0 - 100).
     """
     jd_clean = clean_text(job_description)
     resume_clean = clean_text(resume_text)
+
     if not jd_clean or not resume_clean:
         return 0.0
 
-    if _has_sentence_transformers:
-        try:
-            model = get_embedding_model()
-            if model is not None:
-                embeddings = model.encode([jd_clean, resume_clean], convert_to_tensor=True)
-                cos_sim = util.cos_sim(embeddings[0], embeddings[1])
-                score = cos_sim.item()
-                return round(max(0.0, min(1.0, score)) * 100.0, 1)
-        except Exception:
-            pass
-
-    # High-performance TF-IDF cosine similarity fallback
     try:
-        vectorizer = TfidfVectorizer(stop_words='english', ngram_range=(1, 2))
-        tfidf_matrix = vectorizer.fit_transform([jd_clean, resume_clean])
-        sim = float(cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0])
+        model = get_embedding_model()
+
+        if model is not None:
+            embeddings = model.encode(
+                [jd_clean, resume_clean],
+                convert_to_tensor=True
+            )
+
+            cos_sim = _sentence_transformer_util.cos_sim(
+                embeddings[0],
+                embeddings[1]
+            )
+
+            score = cos_sim.item()
+            return round(max(0.0, min(1.0, score)) * 100.0, 1)
+
+    except Exception as e:
+        print(f"Embedding similarity fallback: {e}")
+
+    # TF-IDF fallback
+    try:
+        vectorizer = TfidfVectorizer(
+            stop_words="english",
+            ngram_range=(1, 2)
+        )
+
+        tfidf_matrix = vectorizer.fit_transform(
+            [jd_clean, resume_clean]
+        )
+
+        sim = float(
+            cosine_similarity(
+                tfidf_matrix[0:1],
+                tfidf_matrix[1:2]
+            )[0][0]
+        )
+
         return round(max(0.0, min(1.0, sim)) * 100.0, 1)
+
     except Exception as e:
         print(f"TF-IDF cosine similarity error: {e}")
         return 50.0
+
 
 def match_resume_to_job(resume_text: str, job_description: str, job_title: str = "", required_skills_str: str = "", preferred_skills_str: str = "", req_exp: int = 0) -> Dict[str, Any]:
     candidate_skills = extract_skills(resume_text)
