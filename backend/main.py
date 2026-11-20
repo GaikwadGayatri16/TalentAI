@@ -4,6 +4,7 @@ import json
 import random
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -145,7 +146,32 @@ def update_profile(profile_in: UserProfileUpdate, db: Session = Depends(get_db),
     db.refresh(current_user)
     return current_user
 
+@app.post(f"{settings.API_V1_STR}/auth/token", response_model=Token)
+def swagger_login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
+    """OAuth2-compatible login for Swagger UI."""
+    user = db.query(User).filter(
+        User.email == form_data.username.strip().lower()
+    ).first()
 
+    if not user or not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password."
+        )
+
+    access_token = create_access_token(
+        data={"sub": user.email, "role": user.role, "id": user.id}
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "role": user.role,
+        "name": user.name
+    }
 # ==========================================
 # --- Candidate Resume Management Endpoints ---
 # ==========================================

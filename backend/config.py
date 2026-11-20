@@ -37,3 +37,5 @@ settings = Settings()
 
 # Ensure uploads directory exists
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+
+GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")

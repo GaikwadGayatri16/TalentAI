@@ -9,7 +9,7 @@ from backend.config import settings
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-import google.generativeai as genai
+from google import genai
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # NLTK with safe fallback
@@ -673,53 +673,76 @@ def match_resume_to_job(resume_text: str, job_description: str, job_title: str =
 
 def get_gemini_client():
     if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY.strip() == "":
-        raise ValueError("GEMINI_API_KEY is not configured in backend environment (.env).")
-    genai.configure(api_key=settings.GEMINI_API_KEY)
-    return genai.GenerativeModel("gemini-2.5-flash")
+        raise ValueError("GEMINI_API_KEY is not configured in backend environment.")
+
+    return genai.Client(api_key=settings.GEMINI_API_KEY)
+
+
+def generate_gemini_text(prompt: str) -> str:
+    client = get_gemini_client()
+
+    interaction = client.interactions.create(
+        model="gemini-3.5-flash",
+        input=prompt
+    )
+
+    if not interaction.output_text:
+        raise RuntimeError("Gemini returned an empty response.")
+
+    return interaction.output_text.strip()
+
 
 def evaluate_candidate_with_gemini(resume_text: str, job_title: str, job_description: str) -> dict:
     if not settings.GEMINI_API_KEY:
         print("GEMINI_API_KEY not set. Using structured local analysis fallback.")
         return get_mock_gemini_evaluation()
 
-    try:
-        model = get_gemini_client()
-        prompt = f"""
-You are an expert technical recruiter and talent evaluator.
-Analyze the candidate's resume against the Job Description ({job_title}).
+    prompt = f"""
+You are an expert technical recruiter and resume evaluator.
+
+Evaluate the candidate based only on the information in their resume
+and the job description.
+
+Job Title: {job_title}
 
 Job Description:
 {job_description}
 
-Resume:
+Candidate Resume:
 {resume_text}
 
-Provide your response in STRICT valid JSON format without markdown code fences or backticks.
-Include exactly these keys:
-1. "candidate_summary": 2-3 sentence assessment of the candidate's background and alignment.
-2. "strengths": Array of 3-4 specific verified strengths based on the resume.
-3. "weaknesses": Array of 2-3 areas for improvement relative to this job.
-4. "missing_skills": Array of skills in the job description that are absent in the resume.
-5. "hiring_recommendation": One of: "Strong Hire", "Hire", "Consider", "Reject".
-6. "learning_path": Array of 3 specific actionable study or project recommendations.
-7. "interview_questions": Array of 4 personalized questions based on their profile. Each item must have:
-   - "question": string
-   - "category": string ("Python", "System Design", "Behavioural", etc.)
-   - "suggested_answer": string (guidelines for the recruiter on what a good answer entails)
+Return ONLY valid JSON with these keys:
+- candidate_summary: string
+- strengths: array of strings
+- weaknesses: array of strings
+- missing_skills: array of strings
+- hiring_recommendation: string
+- learning_path: array of strings
+- interview_questions: array of objects containing:
+  - question
+  - category
+  - suggested_answer
+
+Do not invent qualifications, skills, or experience.
 """
-        response = model.generate_content(prompt)
-        text = response.text.strip()
+
+    try:
+        text = generate_gemini_text(prompt)
+
         if text.startswith("```json"):
             text = text[7:]
         elif text.startswith("```"):
             text = text[3:]
+
         if text.endswith("```"):
             text = text[:-3]
-        text = text.strip()
-        return json.loads(text)
+
+        return json.loads(text.strip())
+
     except Exception as e:
         print(f"Gemini API evaluation failed: {e}. Falling back to structured evaluation.")
         return get_mock_gemini_evaluation()
+
 
 def get_mock_gemini_evaluation() -> dict:
     return {
@@ -798,35 +821,36 @@ def chat_career_assistant(
     candidate_name = structured_resume.get("personal_info", {}).get("name", "the candidate")
     skills_list = ", ".join(structured_resume.get("skills", {}).get("all_skills", []))
 
+    
     system_instruction = f"""
-You are the TalentAI Career Assistant, a world-class professional career coach, resume strategist, and technical interview advisor.
-You are conversing with or on behalf of {candidate_name}.
-You have direct verified access to their resume context and technical background.
+    You are the TalentAI Career Assistant, a world-class professional career coach, resume strategist, and technical interview advisor.
+    You are conversing with or on behalf of {candidate_name}.
+    You have direct verified access to their resume context and technical background.
 
-Candidate Skills: {skills_list}
+    Candidate Skills: {skills_list}
 
-Retrieved Relevant Resume Excerpts:
-{retrieved_context}
+    Retrieved Relevant Resume Excerpts:
+    {retrieved_context}
 
-Guidelines:
-1. Always base answers regarding their background strictly on verified information in their resume.
-2. Never invent or hallucinate projects, degrees, or experience they do not have.
-3. If asked how to improve or what they are missing for a role, provide constructive, actionable, and encouraging recommendations.
-4. Maintain conversation continuity: remember references from earlier messages in this chat.
-5. Keep your tone professional, insightful, concise, and helpful.
-"""
+    Guidelines:
+    1. Always base answers regarding their background strictly on verified information in their resume.
+    2. Never invent or hallucinate projects, degrees, or experience they do not have.
+    3. If asked how to improve or what they are missing for a role, provide constructive, actionable, and encouraging recommendations.
+    4. Maintain conversation continuity: remember references from earlier messages in this chat.
+    5. Keep your tone professional, insightful, concise, and helpful.
+    """
+
+    conversation_prompt = f"{system_instruction}\n\n--- Conversation History ---\n"
+
+    for msg in history[-6:]:
+        role = "User" if msg.get("sender") == "user" else "Assistant"
+        conversation_prompt += f"{role}: {msg.get('message', '')}\n"
+
+    conversation_prompt += f"\nUser: {user_message}\nAssistant:"
+
 
     try:
-        model = get_gemini_client()
-        conversation_prompt = f"{system_instruction}\n\n--- Conversation History ---\n"
-        for msg in history[-6:]:
-            role = "User" if msg.get("sender") == "user" else "Assistant"
-            conversation_prompt += f"{role}: {msg.get('message', '')}\n"
-
-        conversation_prompt += f"\nUser: {user_message}\nAssistant:"
-
-        response = model.generate_content(conversation_prompt)
-        reply = response.text.strip()
+        reply = generate_gemini_text(conversation_prompt)
         return reply, sources
 
     except Exception as e:
@@ -871,9 +895,7 @@ Instructions:
 }}
 """
     try:
-        model = get_gemini_client()
-        response = model.generate_content(prompt)
-        text = response.text.strip()
+        text = generate_gemini_text(prompt)
         if text.startswith("```json"):
             text = text[7:]
         elif text.startswith("```"):
@@ -911,9 +933,7 @@ Requirements:
   "key_topics_to_cover": array of strings
 """
     try:
-        model = get_gemini_client()
-        response = model.generate_content(prompt)
-        text = response.text.strip()
+        text = generate_gemini_text(prompt)
         if text.startswith("```json"):
             text = text[7:]
         elif text.startswith("```"):
